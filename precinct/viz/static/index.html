@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Precinct Live</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <div class="brand">Precinct <span id="mode" class="pill">live</span></div>
+  <div class="seg" id="modeSw" title="Which system's published view to draw on the map">
+    <button id="mDist" class="on">Distributed</button><button id="mCent">Centralized</button>
+  </div>
+  <div class="clock"><span id="simtime">t = 0.0 s</span></div>
+  <div class="controls">
+    <button id="btnPause" title="Pause / resume (space)">Pause</button>
+    <label>speed <select id="speed">
+      <option>0.5</option><option selected>1</option><option>2</option><option>4</option><option>8</option>
+    </select></label>
+    <label>loss <input id="loss" type="range" min="0" max="0.3" step="0.01" value="0.01"><span id="lossv">1%</span></label>
+    <button id="btnAgg" class="danger">Kill aggregator</button>
+    <button id="btnReset" class="ghost">Reset</button>
+    <label class="file ghost" id="fileLbl">Load trace<input id="file" type="file" accept=".jsonl,.json"></label>
+  </div>
+</header>
+<main>
+  <section id="mapwrap">
+    <canvas id="map"></canvas>
+    <div id="toast"></div>
+    <button id="btnFit" class="fit" hidden title="Show the whole city (double-click the map)">Fit city</button>
+    <div id="hint">Click a <b>★ center</b> to crash it · click a camera to select · click a track to follow its ID · shift-click empty ground to add a camera · scroll to zoom, drag to pan, double-click to fit</div>
+  </section>
+  <aside>
+    <div class="card">
+      <h3>Live accuracy <span id="accWho" class="who d">distributed</span> <small>(last 10 s)</small></h3>
+      <div class="kpis">
+        <div><span id="kMota">–</span><label>MOTA</label></div>
+        <div><span id="kIdf1">–</span><label>IDF1</label></div>
+        <div><span id="kSw">–</span><label>ID switches</label></div>
+        <div><span id="kLat">–</span><label>latency p50</label></div>
+      </div>
+      <canvas id="spark" height="60"></canvas>
+    </div>
+    <div class="card" id="loadCard">
+      <h3>Compute load <small>(measured, last 1 s)</small></h3>
+      <div class="cmp">
+        <div class="cmp-row"><span class="lbl">Distributed<br><small>busiest center</small></span>
+          <div class="bar"><i id="bDist"></i><b class="cap"></b></div><span class="val" id="vDist">–</span></div>
+        <div class="cmp-row"><span class="lbl">Centralized<br><small>single node</small></span>
+          <div class="bar"><i id="bCent" class="cent"></i><b class="cap"></b></div><span class="val" id="vCent">–</span></div>
+      </div>
+      <table class="cmpt">
+        <tr><th></th><th>distributed</th><th>centralized</th></tr>
+        <tr><td>busiest-node ingress</td><td id="iDist">–</td><td id="iCent">–</td></tr>
+        <tr><td>latency p50</td><td id="lDist">–</td><td id="lCent">–</td></tr>
+        <tr><td>IDF1</td><td id="fDist">–</td><td id="fCent">–</td></tr>
+      </table>
+      <div id="satNote"></div>
+      <div class="sub">Per-center CPU by region · aggregator</div>
+      <div id="regBars"></div>
+      <div class="foot">Compute time of each node's work is measured and charged in simulated time. The centralized twin runs the same city (cameras, objects, seed, loss) with one node and no injected faults, in a separate process.</div>
+    </div>
+    <div class="card">
+      <h3>Layers</h3>
+      <div class="toggles">
+        <label><input type="checkbox" id="tTerr" checked> territories</label>
+        <label><input type="checkbox" id="tCams" checked> camera views</label>
+        <label><input type="checkbox" id="tGt"> ground truth</label>
+        <label><input type="checkbox" id="tTrail" checked> trails</label>
+        <label><input type="checkbox" id="tLabels" checked> ID labels</label>
+        <label><input type="checkbox" id="tShadow"> region view (selected)</label>
+      </div>
+    </div>
+    <div class="card" id="selCard">
+      <h3>Selection</h3>
+      <div id="sel">Nothing selected.</div>
+    </div>
+    <div class="card grow">
+      <h3>Events</h3>
+      <ol id="events"></ol>
+    </div>
+  </aside>
+</main>
+<footer>
+  <button id="btnLive" class="ghost" title="Jump to live">● live</button>
+  <input id="scrub" type="range" min="0" max="0" value="0">
+  <canvas id="timeline" height="18"></canvas>
+</footer>
+<script src="/static/app.js"></script>
+</body>
+</html>
