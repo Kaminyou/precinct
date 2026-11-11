@@ -35,7 +35,7 @@ TIER = {
     "SNAPREQ": "center-agg", "SNAPSHOT": "center-agg", "CSYNC": "center-agg",
     "CSYNC_R": "center-agg",
     "CHELLO": "directory", "DIRUPD": "directory", "JOIN": "directory", "JOIN_R": "directory",
-    "LEAVE": "directory", "MFAIL": "directory", "APPOINT": "directory",
+    "LEAVE": "directory", "MFAIL": "directory", "MALIVE": "directory", "APPOINT": "directory",
 }
 
 

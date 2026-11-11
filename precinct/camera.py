@@ -290,6 +290,7 @@ class CenterRole:
         self.region_cache = {}    # region -> center node id
         self.pending_reports = {}
         self.next_k = None
+        self.revive_sent = {}     # cam -> last MALIVE time
 
     # ------------------------------------------------------------ setup
     def start(self):
@@ -346,6 +347,7 @@ class CenterRole:
             self.sim.stats.counters["late_det"] += 1
             self.sim.stats.counters["late_det_n"] += len(d["P"])
             return
+        self._check_live(m.src)
         self.buf.setdefault(k, {})[m.src] = (m.src, d["tau"], d["P"], d["Z"], d["C"])
         a = self.arr.setdefault(k, [0, 0.0, 0.0, 0])
         a[0] += len(d["P"])
@@ -356,6 +358,20 @@ class CenterRole:
             expected = [c for c in self.n.dir.members(self.n.region) if c not in self.failed]
             if len(self.buf[k]) >= len(expected):
                 self._close(k)
+
+    def _check_live(self, cam):
+        """A member we hear from is alive. If the directory has marked it failed
+        (a false suspicion: e.g. it was silent while re-syncing its clock after a
+        failover, or its messages were lost), tell the directory, or it would stay
+        out of the territory for good."""
+        live = self.n.dir.live
+        if cam < len(live) and live[cam]:
+            self.revive_sent.pop(cam, None)
+            return
+        now = self.sim.now
+        if now - self.revive_sent.get(cam, -1e9) >= self.cfg.T_hello:
+            self.revive_sent[cam] = now
+            self.n.send(AGG, Msg("MALIVE", {"region": self.n.region, "cams": [cam]}, 20))
 
     def on_ctrl(self, m):
         src_region = m.data.get("src")

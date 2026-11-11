@@ -17,6 +17,7 @@ class Directory:
         self.cam_pos = np.array(cam_pos, float)
         self.cam_region = np.array(cam_region, int)
         self.live = np.ones(len(cam_pos), bool)
+        self.left = set()                  # gracefully departed cameras never come back
         self.voters = {k: list(v) for k, v in voters.items()}
         self.centroids = np.array(centroids)
         self.centers = {}
@@ -382,7 +383,17 @@ class AggregatorNode(Node):
 
     def on_LEAVE(self, m):
         self.dir.live[m.data["cam"]] = False
+        self.dir.left.add(m.data["cam"])
         self._publish()
+
+    def on_MALIVE(self, m):
+        """A center hears from cameras that the directory has marked failed."""
+        D = self.dir
+        back = [c for c in m.data["cams"] if c < len(D.live) and not D.live[c] and c not in D.left]
+        if back:
+            D.live[back] = True
+            self.sim.log("member_back", region=m.data["region"], cams=back)
+            self._publish()
 
     def on_WHO(self, m):
         reg = m.data.get("region")

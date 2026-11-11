@@ -290,29 +290,35 @@ function gidHistory(gid) {
   }
   return out;
 }
+// The panel is redrawn with every frame (~10 Hz live). Touch the DOM only when its content
+// changes: replacing a button between mousedown and mouseup swallows the click.
+function setHTML(el, html) { if (el._html !== html) { el._html = html; el.innerHTML = html; } }
+$("sel").addEventListener("click", (ev) => {
+  const b = ev.target.closest("button[data-cmd]");
+  if (b) send({ cmd: b.dataset.cmd, node: +b.dataset.node });
+});
 function drawSel(f) {
   const el = $("sel");
-  if (!S.sel) { el.innerHTML = "Nothing selected."; return; }
+  if (!S.sel) { setHTML(el, "Nothing selected."); return; }
   const cams = allCams();
   if (S.sel.type === "cam") {
-    const i = S.sel.id, c = cams[i], dead = f.dead.includes(i);
+    const i = S.sel.id, c = cams[i], dead = f.dead.includes(i), left = (f.left || []).includes(i);
     const isCenter = Object.values(f.centers).includes(i);
     const isVoter = Object.values(f.voters || {}).flat().includes(i);
-    const role = dead ? "down" : isCenter ? "center (Raft leader)" : isVoter ? "Raft voter" : "member";
-    el.innerHTML = `<div class="row"><b>Camera ${i}</b><span>region ${c[2]}</span></div>
+    const role = left ? "left (retired)" : dead ? "down" : isCenter ? "center (Raft leader)" : isVoter ? "Raft voter" : "member";
+    setHTML(el, `<div class="row"><b>Camera ${i}</b><span>region ${c[2]}</span></div>
       <div class="row"><span>role</span><span>${role}</span></div>
       <div class="row"><span>position</span><span>(${c[0].toFixed(0)}, ${c[1].toFixed(0)})</span></div>
-      <div class="btns">${dead ? `<button data-cmd="recover">Recover</button>` :
-        `<button class="danger" data-cmd="crash">Crash</button><button data-cmd="leave">Leave</button>`}</div>`;
-    el.querySelectorAll("button").forEach((b) => b.onclick = () => send({ cmd: b.dataset.cmd, node: i }));
+      <div class="btns">${left ? "" : dead ? `<button data-cmd="recover" data-node="${i}">Recover</button>` :
+        `<button class="danger" data-cmd="crash" data-node="${i}">Crash</button><button data-cmd="leave" data-node="${i}">Leave</button>`}</div>`);
   } else if (S.sel.type === "gid") {
     const g = S.sel.gid, v = vmapOf(f).get(g), hist = gidHistory(g);
     const owners = hist.filter((h) => h[1] !== null).map((h) => h[1]);
     const handoffs = owners.filter((r, j) => j > 0 && r !== owners[j - 1]).length;
-    el.innerHTML = `<div class="row"><b style="color:${gidColor(g)}">ID ${g}</b><span>${v ? (v[4] ? "stale" : "live") : "not in view"}</span></div>
+    setHTML(el, `<div class="row"><b style="color:${gidColor(g)}">ID ${g}</b><span>${v ? (v[4] ? "stale" : "live") : "not in view"}</span></div>
       <div class="row"><span>owner region</span><span>${v ? v[3] : "–"}</span></div>
       <div class="row"><span>region changes</span><span>${handoffs}</span></div>
-      <div class="hist">${hist.map((h) => `${h[0].toFixed(1)}s → ${h[1] === null ? "gap" : "region " + h[1]}`).join("<br>")}</div>`;
+      <div class="hist">${hist.map((h) => `${h[0].toFixed(1)}s → ${h[1] === null ? "gap" : "region " + h[1]}`).join("<br>")}</div>`);
   }
 }
 

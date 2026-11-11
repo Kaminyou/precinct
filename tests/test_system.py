@@ -102,3 +102,13 @@ def test_centralized_baseline_runs():
     s.run()
     assert s.cfg.K == 1
     assert s.results()["accuracy"]["mota"] > 0.8
+
+
+def test_falsely_suspected_cameras_rejoin_directory():
+    # at high loss, members miss heartbeat windows (e.g. while re-syncing after a
+    # failover) and get suspected; once heard from again they must be live again
+    s = System(Config(M=100, duration=40, seed=3, p_loss=0.2, cost_model="none"))
+    s.run()
+    D = s.agg.dir
+    ghosts = [c.id for c in s.cams if c.alive and not c.left and not D.live[c.id]]
+    assert ghosts == []

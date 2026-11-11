@@ -150,7 +150,10 @@ class System:
             if len(args) > 1 and args[1]:
                 sim.after(args[1], self.inject, "recover", args[0])
         elif kind == "recover":
-            sim.nodes[args[0]].recover()
+            node = sim.nodes[args[0]]
+            if node.alive or getattr(node, "left", False):
+                return                      # nothing to recover; a retired camera stays retired
+            node.recover()
             sim.log("recover", node=args[0])
         elif kind == "crash_center":
             c = self.center_of(args[0])
@@ -281,6 +284,7 @@ class System:
                     regions[c.region] = [[gid_str(r.gid), round(float(r.x[0]), 1), round(float(r.x[1]), 1),
                                           int(r.owner), r.status] for r in c.role.work.tracks.values()]
         dead = [c.id for c in self.cams if not c.alive or c.left]
+        left = [c.id for c in self.cams if c.left]
         voters = {}
         for c in self.cams:
             if c.alive and c.role is not None:
@@ -295,7 +299,7 @@ class System:
         return {"type": "frame", "k": k, "t": round((k + 1) * cfg.dt, 2),
                 "gt": [[int(i), round(float(p[0]), 1), round(float(p[1]), 1)] for i, p in zip(ids, pos)],
                 "view": view, "view_k": None if v is None else int(max(self.rec.views)),
-                "centers": centers, "voters": voters, "regions": regions, "dead": dead,
+                "centers": centers, "voters": voters, "regions": regions, "dead": dead, "left": left,
                 "agg_alive": self.agg.alive, "cams_new": self._new_cams(),
                 "events": evs}
 
