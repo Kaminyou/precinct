@@ -1,6 +1,6 @@
 # Precinct — Scalable Distributed Real-Time City-Wide Multi-Camera Tracking
 
-Implementation of the design in `report/main.tex`: cameras are grouped into regions;
+Implementation of the Precinct: cameras are grouped into regions;
 each region's Raft leader (the *center*) fuses its cameras' detections, assigns
 global IDs, replicates its track table with Raft, and hands tracks off to
 neighbouring regions with an epoch protocol; a global aggregator merges regional
