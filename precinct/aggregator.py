@@ -67,6 +67,7 @@ class AggregatorNode(Node):
         self.view = {}
         self.vanished = {}        # gid -> (x, y, t, region, epoch, created)
         self.seen = set()
+        self.last_ref = {}        # raw gid -> last step it was referenced (for pruning z/created)
 
     # ------------------------------------------------------------ lifecycle
     def start(self):
@@ -200,6 +201,7 @@ class AggregatorNode(Node):
                 continue
             stale = kr < k
             for t in tracks.values():
+                self.last_ref[t[0]] = k
                 g = self._resolve(t[0])
                 x, y = t[1] + t[3] * age, t[2] + t[4] * age
                 var = t[5] + (age * 3.0) ** 2
@@ -215,7 +217,33 @@ class AggregatorNode(Node):
             self._global_reid(view, t_view)
         self._retry_merges()
         self.view = view
+        if k % self.PRUNE_EVERY == 0:
+            self._prune_soft(k)
         return view
+
+    PRUNE_EVERY = 100             # steps between prunes of per-gid caches
+
+    def _prune_soft(self, k):
+        """Forget appearance vectors and creation times of gids that no region
+        has reported for longer than any mechanism can still use them (lost pool,
+        offers, global re-id window). Without this, z/created grow with every gid
+        ever created, so a long-running deployment (or the live viewer) leaks."""
+        cfg = self.sim.cfg
+        horizon = (cfg.T_gl + cfg.T_lost + cfg.T_coast_max + cfg.T_h + 10.0) / cfg.dt
+        for v in self.vanished.values():
+            self.last_ref[v[6]] = k
+        for lo, m in self.merges.items():
+            self.last_ref[lo] = k
+            self.last_ref[m[0]] = k
+        old = [g for g, kk in self.last_ref.items() if k - kk > horizon]
+        for g in old:
+            del self.last_ref[g]
+            self.z.pop(g, None)
+            self.created.pop(g, None)
+        # gids that were cached but never referenced in a view (e.g. snapshot-only)
+        for d in (self.z, self.created):
+            for g in [g for g in d if g not in self.last_ref]:
+                self.last_ref[g] = k
 
     # ------------------------------------------------------------ duplicates
     def _dedup(self, view):
