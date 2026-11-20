@@ -81,7 +81,8 @@ class CameraNode(Node):
         d = m.data
         self.joined = True
         self.region = d["region"]
-        self.dir = d["dir"]
+        if getattr(self, "dir", None) is None or d["dir"].version >= self.dir.version:
+            self.dir = d["dir"]           # a duplicate (retried) reply may be older
         if self.raft is not None:
             if self.id in d["voters"]:
                 if not self.raft.active:
@@ -340,6 +341,14 @@ class CenterRole:
     def on_det(self, m):
         d = m.data
         k = d["k"]
+        if m.src >= len(self.n.dir.cam_pos):
+            # A camera that joined after our directory version: it learned its
+            # center from JOIN_R before our DIRUPD arrived (or the DIRUPD was
+            # lost). We cannot place its detections yet; drop them. Our next
+            # CHELLO carries our version, and the directory answers with the
+            # current one.
+            self.sim.stats.counters["det_unknown_cam"] += 1
+            return
         self.last_heard[m.src] = self.sim.now
         if m.src in self.failed:
             self.failed.discard(m.src)

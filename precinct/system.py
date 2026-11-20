@@ -318,7 +318,12 @@ class System:
 
 
 class _Joiner:
-    """A not-yet-registered camera asking the directory to join."""
+    """A not-yet-registered camera asking the directory to join. The JOIN is
+    retried until answered (§3.8); a token makes retries idempotent, so a JOIN
+    whose reply was lost does not register the camera twice."""
+
+    RETRY = 1.0
+    _n = 0
 
     def __init__(self, sim, system, pos):
         self.sim, self.sys, self.pos = sim, system, pos
@@ -326,11 +331,26 @@ class _Joiner:
     def go(self):
         from .sim import Node
 
+        joiner = self
+
         class _Tmp(Node):
             def on_JOIN_R(s, m):
-                pass
-        t = _Tmp(self.sim, f"joiner{self.sim.now:.3f}")
-        t.send("agg", Msg("JOIN", {"cam": None, "pos": self.pos, "rejoin": False}, 48))
+                joiner.done = True
+                s.alive = False
+                s.sim.nodes.pop(s.id, None)        # the real camera node takes over
+
+        self.done = False
+        _Joiner._n += 1
+        self.token = f"joiner{_Joiner._n}"
+        self.node = _Tmp(self.sim, self.token)
+        self._send()
+
+    def _send(self):
+        if self.done:
+            return
+        self.node.send("agg", Msg("JOIN", {"cam": None, "pos": self.pos, "rejoin": False,
+                                           "token": self.token}, 48))
+        self.sim.after(self.RETRY, self._send)
 
 
 def _jsonable(x):
