@@ -274,8 +274,11 @@ class RaftPeer:
         if conf:
             self._recompute_voters()
         match = prev + len(d["ents"])
+        # commitIndex = min(leaderCommit, index of last new entry), and it never
+        # moves backwards: a delayed or reordered AppendEntries can carry a small
+        # `match`, which must not lower a commit index learned earlier.
         if d["commit"] > self.commit:
-            self.commit = min(d["commit"], match)
+            self.commit = max(self.commit, min(d["commit"], match))
             self._apply()
         self.h.send(m.src, Msg("AE_R", {"term": self.term, "ok": True, "match": match}, 24))
 

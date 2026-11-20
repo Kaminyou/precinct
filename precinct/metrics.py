@@ -198,6 +198,11 @@ def latency(rec: Recorder, cfg, k_from=None):
             t_rcv = rec.arecv.get((reg, k))
             if t_com is None or t_rcv is None:
                 continue
+            # With a single voter (centralized baseline, or a region shrunk to one
+            # live voter) the entry commits inside the charged step handler, before
+            # busy_until is advanced, so the recorded commit time precedes t_done.
+            # The commit cannot logically precede the end of fusion.
+            t_com = max(t_com, t_done)
             cap, arr = s_cap / n, s_arr / n
             parts = {
                 "batching+member->center": arr - cap,
