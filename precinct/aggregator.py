@@ -23,6 +23,7 @@ class Directory:
         self.centers = {}
         self.region_term = {k: -1 for k in voters}
         self.version = 0
+        self.join_tokens = {}              # new-camera join token -> assigned id (durable)
         self.snap = self._build()
 
     def _build(self):
@@ -396,8 +397,14 @@ class AggregatorNode(Node):
         d = m.data
         D = self.dir
         cid = d["cam"]
-        if cid is None or cid >= len(D.cam_pos):
+        token = d.get("token")
+        if cid is None and token is not None and token in D.join_tokens:
+            cid = D.join_tokens[token]          # a retried JOIN: already registered
+            reg = int(D.cam_region[cid])
+        elif cid is None or cid >= len(D.cam_pos):
             cid, reg = D.add_camera(d["pos"])
+            if token is not None:
+                D.join_tokens[token] = cid
             self.sys.spawn_camera(cid, d["pos"], reg, m.src)
         else:
             reg = int(D.cam_region[cid])
@@ -406,8 +413,11 @@ class AggregatorNode(Node):
         for r, c in D.centers.items():
             self.send(c, Msg("DIRUPD", {"dir": snap}, 96))
         self.sys.on_directory(snap)
-        self.send(cid, Msg("JOIN_R", {"region": reg, "voters": D.voters.get(reg, []),
-                                      "center": D.centers.get(reg), "dir": snap}, 128))
+        reply = {"region": reg, "voters": D.voters.get(reg, []),
+                 "center": D.centers.get(reg), "dir": snap, "cam": cid}
+        self.send(cid, Msg("JOIN_R", reply, 128))
+        if m.src != cid:                        # also answer the joiner so it stops retrying
+            self.send(m.src, Msg("JOIN_R", reply, 128))
 
     def on_LEAVE(self, m):
         self.dir.live[m.data["cam"]] = False

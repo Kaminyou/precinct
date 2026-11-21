@@ -86,15 +86,26 @@ class Sim:
         st.msgs[tier] += 1
         st.bytes[tier] += msg.size
         st.node_out[src.id] += msg.size
+        # the sender's incarnation and departure time travel with the event (not
+        # the Msg, which may be re-sent) so delivery can tell whether the sender
+        # crashed before the message actually left it
         if dst_id == src.id:
-            self.at(t_send, self._deliver, msg)
+            self.at(t_send, self._deliver, msg, src, src.incarnation, t_send)
             return
         if self.rng.random() < self.cfg.p_loss:
             st.lost[tier] += 1
             return
-        self.at(t_send + self.delay(), self._deliver, msg)
+        self.at(t_send + self.delay(), self._deliver, msg, src, src.incarnation, t_send)
 
-    def _deliver(self, msg):
+    def _deliver(self, msg, src=None, inc=None, t_send=None):
+        # Crash-stop: a message whose departure was scheduled for later (end of a
+        # capture step, or after a charged computation) never leaves a node that
+        # crashed before that departure time.
+        if src is not None and src.incarnation != inc:
+            t_crash = src.crash_times.get(inc)
+            if t_crash is not None and t_crash < t_send:
+                self.stats.counters["dropped_sender_crashed"] += 1
+                return
         node = self.nodes.get(msg.dst)
         if node is None:
             return
@@ -132,6 +143,7 @@ class Node:
         self.theta_hat = 0.0          # estimated offset of local clock vs reference
         self.best_rtt = math.inf
         self.sync_time = -math.inf
+        self.crash_times = {}         # incarnation -> time it ended by a crash
         sim.nodes[nid] = self
 
     # ---------------- clocks ----------------
@@ -203,6 +215,7 @@ class Node:
         if not self.alive:
             return
         self.alive = False
+        self.crash_times[self.incarnation] = self.sim.now
         self.incarnation += 1
         self.busy_until = 0.0
         self.on_crash()
