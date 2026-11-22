@@ -88,7 +88,16 @@ class CameraNode(Node):
                 if not self.raft.active:
                     self.raft.active = True
                     self.raft.start()
+            elif self.role is not None and d.get("term", -1) < self.raft.term:
+                pass        # a reply older than our own leadership (a retried JOIN): ignore
             else:
+                if self.role is not None:
+                    # we are leading, but the directory has a newer center for this
+                    # region: step down before dropping Raft, or the next step of the
+                    # center role would run without a Raft peer
+                    self.raft.role = self.raft.FOLLOWER
+                    self.raft.leader = None
+                    self.raft_stepped_down()
                 self.raft = None
                 self.committed = None
         if d["center"] is not None:

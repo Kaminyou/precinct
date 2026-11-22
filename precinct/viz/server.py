@@ -303,7 +303,7 @@ def make_app(session=None, replay=None):
                 try:
                     session.command(json.loads(msg.data))
                 except Exception as e:  # keep the demo alive on bad input
-                    await ws.send_str(json.dumps({"type": "error", "msg": str(e)}))
+                    await ws.send_str(json.dumps({"type": "error", "msg": f"{type(e).__name__}: {e}"}))
         session.clients.discard(cl)
         sender.cancel()
         return ws
