@@ -69,6 +69,8 @@ class AggregatorNode(Node):
         self.vanished = {}        # gid -> (x, y, t, region, epoch, created)
         self.seen = set()
         self.last_ref = {}        # raw gid -> last step it was referenced (for pruning z/created)
+        self._pend_key = None     # (next_k, directory version) _pend was computed for
+        self._pend = None         # active regions that have not yet reported next_k
 
     # ------------------------------------------------------------ lifecycle
     def start(self):
@@ -116,12 +118,21 @@ class AggregatorNode(Node):
         self.sys.rec.agg_rebuilt(dt, not timeout)
         self.recovering = None
 
+    def _live_regions(self):
+        """Regions with at least one live camera, cached per directory version
+        (np.unique over every live camera is O(M); the directory changes rarely)."""
+        snap = self.dir.snap
+        if getattr(self, "_lr_snap", None) is not snap:
+            self._lr = ({int(r) for r in np.unique(snap.live_region)}
+                        if len(snap.live_ids) else set())
+            self._lr_snap = snap
+        return self._lr
+
     def _active_regions(self):
         now = self.sim.now
-        cfg = self.sim.cfg
-        snap = self.dir.snap
-        regs = set(int(r) for r in np.unique(snap.live_region)) if len(snap.live_ids) else set()
-        return {r for r in regs if now - self.sys.chello_t.get(r, 0.0) < cfg.T_empty}
+        T_empty = self.sim.cfg.T_empty
+        chello = self.sys.chello_t
+        return {r for r in self._live_regions() if now - chello.get(r, 0.0) < T_empty}
 
     # ------------------------------------------------------------ reports
     def on_REPORT(self, m):
@@ -140,13 +151,28 @@ class AggregatorNode(Node):
         for lo, su in d["aliases"].items():
             self.aliases[lo] = su
             self.sim.log("alias", loser=lo, survivor=su, src="early")
-        self._try_close()
+        self._try_close(reg)
 
-    def _try_close(self):
+    def _try_close(self, reg=None):
         """Close step next_k as soon as every active region has reported it or
-        a later step (a report for next_k can then no longer arrive)."""
-        act = self._active_regions()
-        while act and all(self.maxk.get(r, -1) >= self.next_k for r in act):
+        a later step (a report for next_k can then no longer arrive).
+
+        The set of regions still awaited is computed once per step (and again if
+        the directory changes); each report then only removes its own region.
+        Re-deriving the active set on every report made closing a step
+        O(regions x live cameras), the aggregator's main cost at large M."""
+        while True:
+            key = (self.next_k, self.dir.version)
+            if self._pend_key != key:
+                act = self._active_regions()
+                self._pend = ({r for r in act if self.maxk.get(r, -1) < self.next_k}
+                              if act else None)
+                self._pend_key = key
+            elif reg is not None and self._pend is not None:
+                self._pend.discard(reg)
+            reg = None
+            if self._pend is None or self._pend:
+                return
             self._close(self.next_k)
 
     def on_SNAPSHOT(self, m):
@@ -196,17 +222,20 @@ class AggregatorNode(Node):
         self.included = set(reps)
         view = {}
         t_view = (k + 1) * cfg.dt
+        aliases, last_ref, resolve = self.aliases, self.last_ref, self._resolve
         for reg, (kr, tracks) in self.last_rep.items():
             age = (k - kr) * cfg.dt
             if age > cfg.T_stale:
                 continue
             stale = kr < k
-            for t in tracks.values():
-                self.last_ref[t[0]] = k
-                g = self._resolve(t[0])
-                x, y = t[1] + t[3] * age, t[2] + t[4] * age
-                var = t[5] + (age * 3.0) ** 2
-                cand = (g, x, y, reg, t[6], stale, var, t[0])
+            last_ref.update(dict.fromkeys(tracks, k))      # keys are the raw gids
+            grow = (age * 3.0) ** 2
+            for raw, t in tracks.items():
+                g = resolve(raw) if raw in aliases else raw
+                if stale:
+                    cand = (g, t[1] + t[3] * age, t[2] + t[4] * age, reg, t[6], True, t[5] + grow, raw)
+                else:                                       # fresh report: no extrapolation
+                    cand = (g, t[1], t[2], reg, t[6], False, t[5] + grow, raw)
                 cur = view.get(g)
                 if cur is None or (t[6], not stale, -reg) > (cur[4], not cur[5], -cur[3]):
                     view[g] = cand
@@ -252,7 +281,9 @@ class AggregatorNode(Node):
         items = [v for v in view.values() if not v[5]]
         seen = set()
         if len(items) >= 2:
-            P = np.array([(v[1], v[2]) for v in items])
+            n = len(items)
+            P = np.column_stack((np.fromiter((v[1] for v in items), float, n),
+                                 np.fromiter((v[2] for v in items), float, n)))
             pairs = cKDTree(P).query_pairs(cfg.dup_radius, output_type="ndarray")
             for i, j in pairs:
                 a, b = items[i], items[j]
@@ -275,42 +306,55 @@ class AggregatorNode(Node):
         """Link gids that appear for the first time to gids that vanished
         recently anywhere (objects crossing uncovered gaps between regions)."""
         cfg = self.sim.cfg
-        for g, v in self.view.items():
-            if g not in view and g not in self.merges and g not in self.aliases:
+        prev, merges, aliases = self.view, self.merges, self.aliases
+        for g in [g for g in prev if g not in view]:
+            if g not in merges and g not in aliases:
+                v = prev[g]
                 self.vanished[g] = (v[1], v[2], t, v[3], v[4], self.created.get(v[7], t), v[7])
         for g in list(self.vanished):
             if g in view or t - self.vanished[g][2] > cfg.T_gl:
                 del self.vanished[g]
-        for g, v in view.items():
-            if g in self.seen:
-                continue
-            self.seen.add(g)
-            if v[5] or not self.vanished:
+        seen = self.seen
+        new = [g for g in view if g not in seen]
+        seen.update(new)
+        if self.vanished and new:
+            self._reid_new(view, new, t)
+        if len(self.seen) > 200000:
+            self.seen = set(view)
+
+    def _reid_new(self, view, new, t):
+        cfg = self.sim.cfg
+        # Candidates for re-identification, as arrays so each new gid is matched
+        # against every recently vanished gid with one vectorized test instead of
+        # a Python loop (the vanished pool holds thousands of gids at large M).
+        keys = list(self.vanished)
+        V = np.array([self.vanished[h][:3] + (self.vanished[h][5],) for h in keys])  # x, y, tv, cr
+        reach2 = (cfg.v_max * (t - V[:, 2]) + 10.0) ** 2
+        taken = np.zeros(len(keys), bool)
+        for g in new:
+            v = view[g]
+            if v[5]:
                 continue
             z = self.z.get(v[7])
             cg = self.created.get(v[7], t)
             if z is None:
                 continue
-            best, bc = None, -1.0
-            for h, (x, y, tv, reg, ep, cr, raw) in self.vanished.items():
-                if cr >= cg:
-                    continue
-                reach = cfg.v_max * (t - tv) + 10.0
-                if (x - v[1]) ** 2 + (y - v[2]) ** 2 > reach ** 2:
-                    continue
-                zh = self.z.get(raw)
+            ok = ~taken & (V[:, 3] < cg) & ((V[:, 0] - v[1]) ** 2 + (V[:, 1] - v[2]) ** 2 <= reach2)
+            best, bc, bi = None, -1.0, -1
+            for i in np.flatnonzero(ok):           # in pool order: ties keep the first, as before
+                h = keys[i]
+                zh = self.z.get(self.vanished[h][6])
                 if zh is None:
                     continue
                 cs = float(zh @ z)
                 if cs >= cfg.s_reid and cs > bc:
-                    best, bc = h, cs
+                    best, bc, bi = h, cs, i
             if best is not None and g not in self.merges:
                 x, y, tv, reg, ep, cr, raw = self.vanished.pop(best)
+                taken[bi] = True
                 self.merges[g] = [best, v[3], -1e9, self.sim.now, reg, ep, cr, True]
                 self.sim.log("reid_decided", loser=g, survivor=best)
                 self.sim.stats.counters["global_reid"] += 1
-        if len(self.seen) > 200000:
-            self.seen = set(view)
 
     def _decide_merge(self, view, key):
         g1, g2 = key
@@ -414,7 +458,8 @@ class AggregatorNode(Node):
             self.send(c, Msg("DIRUPD", {"dir": snap}, 96))
         self.sys.on_directory(snap)
         reply = {"region": reg, "voters": D.voters.get(reg, []),
-                 "center": D.centers.get(reg), "dir": snap, "cam": cid}
+                 "center": D.centers.get(reg), "dir": snap, "cam": cid,
+                 "term": D.region_term.get(reg, -1)}
         self.send(cid, Msg("JOIN_R", reply, 128))
         if m.src != cid:                        # also answer the joiner so it stops retrying
             self.send(m.src, Msg("JOIN_R", reply, 128))
